@@ -9,7 +9,11 @@
   .hint{font-size:12px;opacity:.7;text-align:center}
 </style>
 <canvas id="game" width="760" height="620"></canvas>
-<div class="hint">藍隊 WASD・J 傳・K 射・L 鏟球　|　綠隊 方向鍵・, 傳・. 射・/ 鏟　|　1 電腦・2 雙人・空白 開球・R 重來</div>
+<div class="hint">WASD 跑・J 傳・K 射・L 鏟　|　1 電腦・2 雙人・3 開房・4 加入・空白 開球・R 重來　(連線兩邊都用 WASD)</div>
+<script type="module">
+  try{ const m=await import('https://esm.run/trystero/nostr'); window.TS={joinRoom:m.joinRoom}; console.log('Trystero ready'); }
+  catch(e){ console.error('Trystero 載入失敗, 連線功能無法用:',e); }
+</script>
 <script>
 const cv=document.getElementById('game'), ctx=cv.getContext('2d'), W=cv.width, H=cv.height;
 // ---- 邏輯球場(俯視): x 0..100, y 0..160 (y=0 遠/上, y=160 近/下) ----
@@ -27,6 +31,7 @@ const TEAMC={b:{name:'藍隊',c:'#2f6bff',d:'#16306e'}, g:{name:'綠隊',c:'#1aa
 function mkP(team,role,x,y){return{team,role,x,y,vx:0,vy:0,hx:x,hy:y,fx:0,fy:team==='b'?-1:1,actCd:0,slide:0,slideCd:0,fly:0,spin:0};}
 let players=[], ball, score, timeLeft, state, goalTimer, goalText, mode, activeB, activeG, passLock, receiver, humanB, humanG;
 let fx=[], trail=[], shake=0;                               // 粒子 / 球軌跡 / 畫面震動
+let net={role:null,room:null,sendIn:null,sendSt:null,remoteIn:{},remoteAct:{pass:0,shoot:0,tackle:0},snap:null,tick:0,peer:false};
 function makeTeams(){
   players=[
     mkP('b','out',28,112), mkP('b','out',50,96), mkP('b','out',72,112), mkP('b','gk',50,FH-4),
@@ -46,9 +51,13 @@ const keys={}, act={passB:0,shootB:0,passG:0,shootG:0,tackleB:0,tackleG:0};
 addEventListener('keydown',e=>{
   keys[e.code]=true;
   if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Space','Slash'].includes(e.code))e.preventDefault();
-  if(e.code==='Digit1')mode='ai'; if(e.code==='Digit2')mode='2p';
-  if(e.code==='Space'&&(state==='ready'||state==='over'))startMatch();
-  if(e.code==='KeyR')resetAll();
+  const onl = mode==='host'||mode==='client';
+  if((state==='ready'||state==='over')&&!onl){
+    if(e.code==='Digit1')mode='ai'; if(e.code==='Digit2')mode='2p';
+    if(e.code==='Digit3')goOnline('host'); if(e.code==='Digit4')goOnline('join');
+    if(e.code==='Space')startMatch();
+  }
+  if(e.code==='KeyR'&&!onl)resetAll();
   if(e.code==='KeyJ')act.passB=1; if(e.code==='KeyK')act.shootB=1;
   if(e.code==='Comma')act.passG=1; if(e.code==='Period')act.shootG=1;
   if(e.code==='KeyL')act.tackleB=1; if(e.code==='Slash')act.tackleG=1;
@@ -76,10 +85,11 @@ function passTarget(t,from){ // 最前方又不太遠的隊友
 function moveToward(p,tx,ty,spd){ const dx=tx-p.x,dy=ty-p.y,d=Math.hypot(dx,dy)||1;
   p.vx=dx/d*spd; p.vy=dy/d*spd; if(spd>0.05){p.fx=dx/d;p.fy=dy/d;} }
 
-function driveHuman(p,K){ let dx=0,dy=0;
-  if(keys[K.l])dx--; if(keys[K.r])dx++; if(keys[K.u])dy--; if(keys[K.d])dy++;
-  const d=Math.hypot(dx,dy); if(d){p.vx=dx/d*SP;p.vy=dy/d*SP;p.fx=dx/d;p.fy=dy/d;} else {p.vx*=0.6;p.vy*=0.6;}
+function applyMove(p,l,r,u,d){ let dx=0,dy=0;
+  if(l)dx--; if(r)dx++; if(u)dy--; if(d)dy++;
+  const m=Math.hypot(dx,dy); if(m){p.vx=dx/m*SP;p.vy=dy/m*SP;p.fx=dx/m;p.fy=dy/m;} else {p.vx*=0.6;p.vy*=0.6;}
 }
+function driveHuman(p,K){ applyMove(p,keys[K.l],keys[K.r],keys[K.u],keys[K.d]); }
 function driveAI(p,car){
   if(car===p){ const g=atkGoal(p.team), dg=dist(p,g);
     if(dg<52){ doShoot(p.team,p); }                       // 進射程就射
@@ -114,11 +124,15 @@ function step(){
   for(const p of players){ if(p.actCd>0)p.actCd--; if(p.slideCd>0)p.slideCd--; }
   const car=carrier();
   // 固定控制: 你永遠只操作 humanB(黃圈), 其餘全AI, 不再自動切
-  activeB = humanB; activeG = (mode==='2p') ? humanG : null;
-  // 動作鍵: 只有你那一隻持球時才有效
+  const greenHuman = mode==='2p'||mode==='host';
+  activeB = humanB; activeG = greenHuman ? humanG : null;
+  // 藍隊動作(本機鍵)
   if(car===humanB){ if(act.passB)doPass('b',car); if(act.shootB)doShoot('b',car); }
-  if(mode==='2p'&&car===humanG){ if(act.passG)doPass('g',car); if(act.shootG)doShoot('g',car); }
-  if(act.tackleB)tryTackle(humanB); if(mode==='2p'&&act.tackleG)tryTackle(humanG);
+  if(act.tackleB)tryTackle(humanB);
+  // 綠隊動作: 2p吃本機方向鍵動作 / host吃遠端傳來的
+  if(mode==='2p'){ if(car===humanG){ if(act.passG)doPass('g',car); if(act.shootG)doShoot('g',car); } if(act.tackleG)tryTackle(humanG); }
+  if(mode==='host'){ if(car===humanG){ if(net.remoteAct.pass)doPass('g',car); if(net.remoteAct.shoot)doShoot('g',car); }
+    if(net.remoteAct.tackle)tryTackle(humanG); net.remoteAct.pass=net.remoteAct.shoot=net.remoteAct.tackle=0; }
   act.passB=act.shootB=act.passG=act.shootG=act.tackleB=act.tackleG=0;
   // 每隊派一個AI追球, 其餘站位
   const chB=aiChaser('b'), chG=aiChaser('g');
@@ -127,7 +141,8 @@ function step(){
     if(p.slide>0){ p.slide--; p.vx*=0.95; p.vy*=0.95;                            // 鏟球衝刺中
       if(p.slide%2===0){const q=proj(p.x,p.y);spawn(q.sx,q.sy,{vx:(Math.random()-0.5)*2,vy:-Math.random()*1.5,life:16,size:3,col:'#cdbd92'});} continue; }
     if(p===humanB){ driveHuman(p,{l:'KeyA',r:'KeyD',u:'KeyW',d:'KeyS'}); continue; }
-    if(mode==='2p'&&p===humanG){ driveHuman(p,{l:'ArrowLeft',r:'ArrowRight',u:'ArrowUp',d:'ArrowDown'}); continue; }
+    if(p===humanG&&mode==='2p'){ driveHuman(p,{l:'ArrowLeft',r:'ArrowRight',u:'ArrowUp',d:'ArrowDown'}); continue; }
+    if(p===humanG&&mode==='host'){ applyMove(p,net.remoteIn.l,net.remoteIn.r,net.remoteIn.u,net.remoteIn.d); continue; }
     if(p.role==='gk'){ keeper(p); continue; }
     if(p===chB||p===chG) driveAI(p,car); else formation(p);
   }
@@ -256,20 +271,67 @@ function render(){
   ctx.fillStyle='#fff';ctx.fillText(':',W/2,44);
   ctx.fillStyle=TEAMC.g.c;ctx.fillText(score?score.g:0,W/2+50,44);
   ctx.font='16px sans-serif';ctx.fillStyle='#cbd5e1';ctx.fillText('⏱ '+Math.ceil(timeLeft||0)+'s',W/2,66);
-  if(state==='ready')overlay([{t:'⚽ 政壇足球 2.5D',s:32,c:'#ffd54a'},
-    {t:(mode==='ai'?'▶ 1 對電腦':'   1 對電腦')+'    '+(mode==='2p'?'▶ 2 雙人':'   2 雙人'),s:22,c:'#7CFC98'},
-    {t:'你只操作黃圈那一隻・隊友AI幫你跑',s:18},
-    {t:'L 鏟球把人鏟飛・大力射門地上拉光線',s:18,c:'#ffb86b'},
-    {t:'空白鍵 開球',s:22}]);
+  if(state==='ready')overlay([{t:'⚽ 政壇足球 2.5D',s:30,c:'#ffd54a'},
+    {t:(mode==='ai'?'▶1 對電腦':' 1 對電腦')+'    '+(mode==='2p'?'▶2 雙人(同機)':' 2 雙人(同機)'),s:20,c:'#7CFC98'},
+    {t:'3 建立房間    4 加入房間    (跟朋友線上對戰)',s:18,c:'#8ad0ff'},
+    {t:(mode==='host'||mode==='client')?(goalText||''):'你只操作黃圈那一隻・隊友AI幫你跑',s:18,c:'#ffd54a'},
+    {t:'WASD 跑・J 傳・K 射・L 鏟　　空白鍵 開球',s:18,c:'#ffb86b'}]);
   if(state==='goal')overlay([{t:goalText,s:38,c:'#ffd54a'}]);
   if(state==='over'){const w=score.b===score.g?'平手！':(score.b>score.g?'藍隊':'綠隊')+' 獲勝！';
     overlay([{t:'⏱ 時間到',s:28},{t:w,s:34,c:'#ffd54a'},{t:'空白鍵 再戰　R 歸零',s:20,c:'#7CFC98'}]);}
 }
 
+// ---------------- 連線 (Trystero, host 說了算) ----------------
+function goOnline(role){
+  if(!window.TS){ alert('連線元件還在載入, 等一兩秒再按一次 3 或 4'); return; }
+  const code=(prompt(role==='host'?'建立房間 — 自訂一組房間碼, 傳給朋友:':'加入房間 — 輸入朋友給你的房間碼:')||'').trim();
+  if(!code)return;
+  const room=window.TS.joinRoom({appId:'tw-politician-soccer-v1'}, code);
+  net.role=role; net.room=room; net.peer=false; net.snap=null;
+  const [sendIn,getIn]=room.makeAction('in');
+  const [sendSt,getSt]=room.makeAction('st');
+  net.sendIn=sendIn; net.sendSt=sendSt;
+  makeTeams(); resetKick(); score={b:0,g:0}; timeLeft=90; state='ready';
+  if(role==='host'){
+    mode='host'; goalText='房間「'+code+'」 等待對手連入...';
+    getIn(d=>{ if(d.mv)net.remoteIn=d.mv;
+      if(d.act){ if(d.act.pass)net.remoteAct.pass=1; if(d.act.shoot)net.remoteAct.shoot=1; if(d.act.tackle)net.remoteAct.tackle=1; } });
+    room.onPeerJoin(id=>{ net.peer=true; console.log('對手連入', id); startMatch(); });
+    room.onPeerLeave(()=>{ net.peer=false; state='over'; goalText='對手離線了'; });
+  } else {
+    mode='client'; goalText='連線中... 等房主開球';
+    getSt(s=>{ net.snap=s; net.peer=true; });
+    room.onPeerJoin(id=>console.log('已連上房主', id));
+    room.onPeerLeave(()=>{ net.peer=false; });
+  }
+}
+function snapshot(){ return {
+  p:players.map(p=>[Math.round(p.x*100)/100,Math.round(p.y*100)/100,p.fly,Math.round(p.spin*100)/100]),
+  b:[Math.round(ball.x*100)/100,Math.round(ball.y*100)/100,Math.round(ball.z*100)/100],
+  s:[score.b,score.g], t:timeLeft, st:state, gt:goalText }; }
+function netSendClient(){ if(!net.sendIn)return;
+  net.sendIn({ mv:{l:!!keys.KeyA,r:!!keys.KeyD,u:!!keys.KeyW,d:!!keys.KeyS},
+               act:{pass:act.passB,shoot:act.shootB,tackle:act.tackleB} });
+  act.passB=act.shootB=act.tackleB=0; }
+function clientApply(){ const s=net.snap; if(!s)return;
+  if(!score)score={b:0,g:0};
+  activeB=humanB; activeG=humanG;
+  for(let i=0;i<players.length&&i<s.p.length;i++){ const p=players[i],t=s.p[i];
+    if(t[2]>0&&p.fly<=0){ const q=proj(t[0],t[1]); burstDust(q.sx,q.sy); }      // 對手被鏟飛→揚塵
+    p.x=lerp(p.x,t[0],0.45); p.y=lerp(p.y,t[1],0.45); p.fly=t[2]; p.spin=t[3]; }
+  const spd=Math.hypot(ball.x-s.b[0],ball.y-s.b[1])*8;
+  ball.x=lerp(ball.x,s.b[0],0.5); ball.y=lerp(ball.y,s.b[1],0.5); ball.z=lerp(ball.z,s.b[2],0.5);
+  trail.push({x:ball.x,y:ball.y,spd}); if(trail.length>14)trail.shift();
+  if(s.s[0]!==score.b)burstGoal('b'); if(s.s[1]!==score.g)burstGoal('g');
+  score.b=s.s[0]; score.g=s.s[1]; timeLeft=s.t; state=s.st; goalText=s.gt; }
+
 // ---- 固定步長迴圈 ----
 let last=0,acc=0;
 function frame(ts){ if(!last)last=ts; acc+=Math.min((ts-last)/1000,0.1); last=ts;
-  while(acc>=1/60){step();acc-=1/60;} render(); requestAnimationFrame(frame); }
+  if(mode==='client'){ stepFX(); netSendClient(); clientApply(); acc=0; }
+  else { while(acc>=1/60){ step(); acc-=1/60;
+    if(mode==='host'&&net.peer&&net.sendSt&&(++net.tick&1)) net.sendSt(snapshot()); } }
+  render(); requestAnimationFrame(frame); }
 
 // ponytail: 投影是唯一不平凡的數學, 留個自我檢查
 function selfTest(){
