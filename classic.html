@@ -1,0 +1,205 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>政壇大頭足球</title>
+<style>
+  html,body{margin:0;height:100%;background:#0d1117;color:#e6edf3;
+    font-family:"Microsoft JhengHei",system-ui,sans-serif;display:flex;
+    flex-direction:column;align-items:center;justify-content:center;gap:10px}
+  canvas{background:#000;border-radius:10px;box-shadow:0 8px 40px #000a;max-width:96vw;height:auto}
+  .hint{font-size:13px;opacity:.7}
+</style>
+<canvas id="game" width="960" height="540"></canvas>
+<div class="hint">藍隊(左) A/D・W 跳・S 大腳　|　綠隊(右) ←/→・↑ 跳・↓ 大腳　|　1 對電腦・2 雙人・空白鍵 開球・R 重來</div>
+<script>
+const cv=document.getElementById('game'), ctx=cv.getContext('2d');
+const W=cv.width, H=cv.height;
+const GROUND_Y=480, GRAVITY=0.62, R=46, BR=15;
+const MOVE=4.6, JUMP=-13.2;
+const GOAL_H=175, BAR_Y=GROUND_Y-GOAL_H, GOAL_LINE=16;
+const MATCH_TIME=90;
+
+// 隊伍設定 — 想換名字/顏色改這裡就好
+const TEAM={
+  blue:{name:'藍隊', jersey:'#2f6bff', hair:'#16306e', skin:'#f3c9a0'},
+  green:{name:'綠隊', jersey:'#1aa64b', hair:'#0c5226', skin:'#f0c197'},
+};
+const mkP=(x,side,ctrl,team)=>({x,y:GROUND_Y-R,vx:0,vy:0,onGround:true,side,ctrl,team,kickCd:0,popT:0});
+const p1=mkP(250, 1,{left:'KeyA',right:'KeyD',jump:'KeyW',kick:'KeyS'},TEAM.blue);
+const p2=mkP(W-250,-1,{left:'ArrowLeft',right:'ArrowRight',jump:'ArrowUp',kick:'ArrowDown'},TEAM.green);
+const players=[p1,p2];
+const ball={x:W/2,y:200,vx:0,vy:0,pop:0};
+
+let score=[0,0], timeLeft=MATCH_TIME, state='ready', goalTimer=0, goalText='', mode='ai';
+const keys={};
+addEventListener('keydown',e=>{
+  keys[e.code]=true;
+  if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Space'].includes(e.code)) e.preventDefault();
+  if(state==='ready'||state==='over'){ if(e.code==='Digit1')mode='ai'; if(e.code==='Digit2')mode='2p'; }
+  if(e.code==='Space' && (state==='ready'||state==='over')) startMatch();
+  if(e.code==='KeyR') resetAll();
+});
+addEventListener('keyup',e=>keys[e.code]=false);
+
+function startMatch(){score=[0,0];timeLeft=MATCH_TIME;state='play';resetPositions();
+  keys[p2.ctrl.left]=keys[p2.ctrl.right]=keys[p2.ctrl.jump]=keys[p2.ctrl.kick]=false;}
+function resetAll(){score=[0,0];timeLeft=MATCH_TIME;state='ready';resetPositions();}
+function resetPositions(){
+  p1.x=250;p1.y=GROUND_Y-R;p1.vx=p1.vy=0;
+  p2.x=W-250;p2.y=GROUND_Y-R;p2.vx=p2.vy=0;
+  ball.x=W/2;ball.y=200;ball.vx=ball.vy=0;
+}
+
+function updatePlayer(p){
+  const k=p.ctrl;
+  if(keys[k.left]) p.vx=-MOVE; else if(keys[k.right]) p.vx=MOVE; else p.vx*=0.8;
+  if(keys[k.jump] && p.onGround){p.vy=JUMP;p.onGround=false;}
+  p.vy+=GRAVITY; p.x+=p.vx; p.y+=p.vy;
+  if(p.y>GROUND_Y-R){p.y=GROUND_Y-R;p.vy=0;p.onGround=true;}
+  p.x=Math.max(R,Math.min(W-R,p.x));
+  if(p.kickCd>0)p.kickCd--; if(p.popT>0)p.popT--;
+}
+function kick(p){
+  if(p.kickCd>0)return;
+  const d=Math.hypot(ball.x-p.x,ball.y-p.y);
+  if(d<R+BR+26){ ball.vx+=p.side*15; ball.vy-=9.5; ball.pop=8; p.popT=8; p.kickCd=22; }
+}
+function collidePlayerBall(p){
+  let dx=ball.x-p.x, dy=ball.y-p.y, d=Math.hypot(dx,dy);
+  if(d<R+BR){
+    if(d===0)d=0.001;
+    const nx=dx/d, ny=dy/d;
+    ball.x=p.x+nx*(R+BR); ball.y=p.y+ny*(R+BR);          // 推開重疊
+    const vn=(ball.vx-p.vx)*nx+(ball.vy-p.vy)*ny;
+    if(vn<0){ ball.vx-=1.7*vn*nx; ball.vy-=1.7*vn*ny; }   // 反彈(恢復係數~0.8)
+    ball.vx+=nx*2.0; ball.vy+=ny*2.0;                     // 每次觸球都帶點力道
+    ball.vx+=p.vx*0.35; ball.vy+=p.vy*0.25;               // 帶入球員動量
+  }
+}
+function doGoal(scorer){ score[scorer]++; goalText=players[scorer].team.name+' 進球！'; state='goal'; goalTimer=80; }
+function updateBall(){
+  ball.vy+=GRAVITY*0.9; ball.vx*=0.995; ball.x+=ball.vx; ball.y+=ball.vy;
+  if(ball.y>GROUND_Y-BR){ball.y=GROUND_Y-BR;ball.vy*=-0.68;ball.vx*=0.97; if(Math.abs(ball.vy)<1.2)ball.vy=0;}
+  if(ball.y<BR){ball.y=BR;ball.vy*=-0.68;}
+  const belowBar=ball.y>BAR_Y;
+  if(ball.x<BR){ if(belowBar&&ball.x<GOAL_LINE){doGoal(1);return;} ball.x=BR;ball.vx*=-0.7; }
+  if(ball.x>W-BR){ if(belowBar&&ball.x>W-GOAL_LINE){doGoal(0);return;} ball.x=W-BR;ball.vx*=-0.7; }
+  if(ball.pop>0)ball.pop--;
+}
+// ponytail: 笨但夠踢的對手AI — 卡到球的右側、往左門大腳、高球就跳頂
+function aiThink(p){
+  const k=p.ctrl;
+  keys[k.left]=keys[k.right]=keys[k.jump]=keys[k.kick]=false;
+  const dx=ball.x-p.x, dy=ball.y-p.y, d=Math.hypot(dx,dy);
+  const targetX=ball.x+34;                                  // 想站球的右邊才能往左踢
+  if(p.x<targetX-8) keys[k.right]=true; else if(p.x>targetX+8) keys[k.left]=true;
+  if(p.onGround && dy<-12 && Math.abs(dx)<R+30) keys[k.jump]=true;   // 球在上方就跳
+  if(d<R+BR+24) keys[k.kick]=true;                          // 夠近就大腳
+}
+function step(h){
+  if(state==='play'){
+    timeLeft-=h; if(timeLeft<=0){timeLeft=0;state='over';}
+    if(mode==='ai') aiThink(p2);
+    updatePlayer(p1); updatePlayer(p2);
+    if(keys[p1.ctrl.kick])kick(p1); if(keys[p2.ctrl.kick])kick(p2);
+    updateBall(); collidePlayerBall(p1); collidePlayerBall(p2);
+  } else if(state==='goal'){
+    if(--goalTimer<=0){ if(timeLeft<=0)state='over'; else {resetPositions();state='play';} }
+  }
+}
+
+// ---------- 畫面 ----------
+function drawGoal(side){
+  const x=side<0?GOAL_LINE:W-GOAL_LINE;
+  ctx.strokeStyle='#fff'; ctx.lineWidth=5;
+  ctx.beginPath(); ctx.moveTo(x,BAR_Y); ctx.lineTo(x,GROUND_Y);                    // 門柱
+  ctx.moveTo(side<0?0:W,BAR_Y); ctx.lineTo(x,BAR_Y); ctx.stroke();                  // 橫樑
+  ctx.strokeStyle='rgba(255,255,255,.18)'; ctx.lineWidth=1;
+  for(let yy=BAR_Y+12;yy<GROUND_Y;yy+=14){ctx.beginPath();ctx.moveTo(side<0?0:W,yy);ctx.lineTo(x,yy);ctx.stroke();}
+}
+function drawPlayer(p){
+  const x=p.x, y=p.y, sc=p.popT>0?1.06:1, r=R*sc;
+  // 鞋子
+  ctx.fillStyle='#222';
+  for(const off of [-22,22]){ ctx.beginPath(); ctx.ellipse(x+off, Math.min(y+R-2,GROUND_Y-4), 14,8,0,0,7); ctx.fill(); }
+  // 頭
+  ctx.fillStyle=p.team.skin; ctx.beginPath(); ctx.arc(x,y,r,0,7); ctx.fill();
+  // 球衣領
+  ctx.fillStyle=p.team.jersey; ctx.beginPath(); ctx.arc(x,y,r,Math.PI*0.18,Math.PI*0.82); ctx.fill();
+  // 頭髮
+  ctx.fillStyle=p.team.hair; ctx.beginPath(); ctx.arc(x,y-6,r*0.92,Math.PI*1.08,Math.PI*1.92); ctx.fill();
+  // 眼睛(看著球)
+  const a=Math.atan2(ball.y-y,ball.x-x), ex=Math.cos(a)*3, ey=Math.sin(a)*3;
+  for(const off of [-15,15]){
+    ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(x+off,y-4,8,0,7); ctx.fill();
+    ctx.fillStyle='#111'; ctx.beginPath(); ctx.arc(x+off+ex,y-4+ey,4,0,7); ctx.fill();
+  }
+  // 眉毛
+  ctx.strokeStyle='#3a2a1a'; ctx.lineWidth=3; ctx.beginPath();
+  ctx.moveTo(x-22,y-16);ctx.lineTo(x-8,y-14); ctx.moveTo(x+8,y-14);ctx.lineTo(x+22,y-16); ctx.stroke();
+  // 隊名
+  ctx.fillStyle=p.team.jersey; ctx.font='bold 16px sans-serif'; ctx.textAlign='center';
+  ctx.fillText(p.team.name, x, y-r-10);
+}
+function drawBall(){
+  const r=ball.pop>0?BR*1.25:BR;
+  ctx.fillStyle='#fff'; ctx.strokeStyle='#222'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.arc(ball.x,ball.y,r,0,7); ctx.fill(); ctx.stroke();
+  ctx.fillStyle='#222'; // 中央五邊形
+  ctx.beginPath();
+  for(let i=0;i<5;i++){const a=-Math.PI/2+i*2*Math.PI/5; ctx[i?'lineTo':'moveTo'](ball.x+Math.cos(a)*r*0.45,ball.y+Math.sin(a)*r*0.45);}
+  ctx.closePath(); ctx.fill();
+}
+function overlay(lines){
+  ctx.fillStyle='rgba(0,0,0,.62)'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+  lines.forEach((l,i)=>{ ctx.fillStyle=l.c||'#fff'; ctx.font=(l.s||22)+'px "Microsoft JhengHei",sans-serif';
+    ctx.fillText(l.t, W/2, H/2-40+i*38); });
+}
+function render(){
+  // 背景天空+草地
+  const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,'#1b2a4a'); g.addColorStop(1,'#24406b');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle='#2e7d32'; ctx.fillRect(0,GROUND_Y,W,H-GROUND_Y);
+  ctx.strokeStyle='rgba(255,255,255,.25)'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(W/2,BAR_Y-30); ctx.lineTo(W/2,GROUND_Y); ctx.stroke(); // 中線
+  drawGoal(-1); drawGoal(1);
+  drawPlayer(p1); drawPlayer(p2); drawBall();
+  // 記分板
+  ctx.textAlign='center';
+  ctx.fillStyle=TEAM.blue.jersey; ctx.font='bold 40px sans-serif'; ctx.fillText(score[0], W/2-60, 50);
+  ctx.fillStyle='#fff'; ctx.fillText(':', W/2, 50);
+  ctx.fillStyle=TEAM.green.jersey; ctx.fillText(score[1], W/2+60, 50);
+  ctx.font='18px sans-serif'; ctx.fillStyle='#cbd5e1'; ctx.fillText('⏱ '+Math.ceil(timeLeft)+'s', W/2, 78);
+  if(state==='ready') overlay([{t:'⚽ 政壇大頭足球',s:34,c:'#ffd54a'},
+    {t:(mode==='ai'?'▶ 1 對電腦':'   1 對電腦')+'      '+(mode==='2p'?'▶ 2 雙人':'   2 雙人'),s:22,c:'#7CFC98'},
+    {t:'空白鍵 開球　(藍隊 A/D/W/S)',s:20}]);
+  if(state==='goal') overlay([{t:goalText,s:40,c:'#ffd54a'}]);
+  if(state==='over'){
+    const w=score[0]===score[1]?'平手！':(score[0]>score[1]?TEAM.blue.name:TEAM.green.name)+' 獲勝！';
+    overlay([{t:'⏱ 時間到',s:30},{t:w,s:36,c:'#ffd54a'},{t:'空白鍵 再戰　R 歸零',s:20,c:'#7CFC98'}]);
+  }
+}
+
+// ---------- 固定步長主迴圈 (高刷新率螢幕也不會變快) ----------
+let last=0, acc=0;
+function frame(ts){
+  if(!last)last=ts; acc+=Math.min((ts-last)/1000,0.1); last=ts;
+  while(acc>=1/60){ step(1/60); acc-=1/60; }
+  render(); requestAnimationFrame(frame);
+}
+
+// ponytail: 碰撞是唯一不平凡的邏輯, 留一個自我檢查
+function selfTest(){
+  const sb={...ball}, s={x:p1.x,y:p1.y,vx:p1.vx,vy:p1.vy};
+  p1.x=200;p1.y=200;p1.vx=0;p1.vy=0;
+  ball.x=200+(R+BR)*0.5;ball.y=200;ball.vx=-5;ball.vy=0;      // 重疊且往球員撞
+  collidePlayerBall(p1);
+  const d=Math.hypot(ball.x-p1.x,ball.y-p1.y);
+  console.assert(Math.abs(d-(R+BR))<0.6,'碰撞應分離到 R+BR, 實際='+d);
+  console.assert(ball.vx>0,'球應被往外推 (vx>0), 實際='+ball.vx);
+  Object.assign(ball,sb); p1.x=s.x;p1.y=s.y;p1.vx=s.vx;p1.vy=s.vy;
+  console.log('%c self-check passed ✓','color:#3fb950');
+}
+selfTest();
+requestAnimationFrame(frame);
+</script>
