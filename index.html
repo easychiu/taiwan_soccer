@@ -1,15 +1,42 @@
 <!doctype html>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>政壇足球 2.5D</title>
 <style>
-  html,body{margin:0;height:100%;background:#0a0f14;color:#e6edf3;
+  html,body{margin:0;min-height:100%;background:#0a0f14;color:#e6edf3;
     font-family:"Microsoft JhengHei",system-ui,sans-serif;display:flex;
-    flex-direction:column;align-items:center;justify-content:center;gap:8px}
-  canvas{background:#0b3d16;border-radius:10px;box-shadow:0 8px 40px #000a;max-width:96vw;height:auto}
+    flex-direction:column;align-items:center;justify-content:center;gap:8px;
+    overscroll-behavior:none;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+  canvas{background:#0b3d16;border-radius:10px;box-shadow:0 8px 40px #000a;max-width:96vw;height:auto;touch-action:none}
   .hint{font-size:12px;opacity:.7;text-align:center}
+  .touch{display:none}
+  @media (pointer:coarse){ .touch{display:flex} body{justify-content:flex-start;padding-top:6px} }
+  #menu{gap:6px;flex-wrap:wrap;justify-content:center}
+  #menu button{padding:7px 12px;border-radius:8px;border:0;font-size:14px;background:#28344a;color:#cfe;font-family:inherit}
+  #controls{width:96vw;max-width:560px;justify-content:space-between;align-items:center;touch-action:none}
+  #pad{width:130px;height:130px;border-radius:50%;background:rgba(255,255,255,.12);position:relative;touch-action:none}
+  #knob{position:absolute;left:50%;top:50%;width:56px;height:56px;margin:-28px 0 0 -28px;border-radius:50%;background:rgba(255,255,255,.4)}
+  #btns{display:flex;flex-direction:column;gap:12px}
+  #btns button{width:66px;height:66px;border-radius:50%;border:0;font-size:18px;font-weight:bold;color:#fff;font-family:inherit}
+  #bPass{background:#2f6bff}#bShoot{background:#e0524d}#bTackle{background:#f0a500}
 </style>
 <canvas id="game" width="760" height="620"></canvas>
-<div class="hint">WASD 跑・J 傳・K 射・L 鏟　|　1 電腦・2 雙人・3 開房・4 加入・空白 開球・R 重來　(連線兩邊都用 WASD)</div>
+<div id="menu" class="touch">
+  <button id="mAI">🤖 對電腦</button>
+  <button id="mHost">📡 開房</button>
+  <button id="mJoin">🔑 加入</button>
+  <button id="mKick">⚽ 開球</button>
+  <button id="mReset">↺ 重來</button>
+</div>
+<div id="controls" class="touch">
+  <div id="pad"><div id="knob"></div></div>
+  <div id="btns">
+    <button id="bPass">傳</button>
+    <button id="bShoot">射</button>
+    <button id="bTackle">鏟</button>
+  </div>
+</div>
+<div class="hint">電腦 WASD 跑・J 傳・K 射・L 鏟　|　手機用下方搖桿＋按鈕　|　1 電腦・3 開房・4 加入・空白 開球</div>
 <script type="module">
   try{ const m=await import('https://esm.run/trystero/nostr'); window.TS={joinRoom:m.joinRoom}; console.log('Trystero ready'); }
   catch(e){ console.error('Trystero 載入失敗, 連線功能無法用:',e); }
@@ -340,5 +367,29 @@ function selfTest(){
   console.assert(proj(0,160).sx<proj(100,160).sx,'左應在右的左邊');
   console.log('%c self-check passed ✓','color:#3fb950');
 }
+// ---------------- 手機觸控 (直接餵 keys/act, 遊戲邏輯不用改) ----------------
+(function(){
+  const pad=document.getElementById('pad'), knob=document.getElementById('knob');
+  if(!pad)return;
+  let id=null, cx=0, cy=0;
+  const setMove=(dx,dy)=>{ const dz=16; keys.KeyA=dx<-dz; keys.KeyD=dx>dz; keys.KeyW=dy<-dz; keys.KeyS=dy>dz; };
+  pad.addEventListener('touchstart',e=>{ e.preventDefault(); const t=e.changedTouches[0]; id=t.identifier;
+    const r=pad.getBoundingClientRect(); cx=r.left+r.width/2; cy=r.top+r.height/2; },{passive:false});
+  pad.addEventListener('touchmove',e=>{ e.preventDefault();
+    for(const t of e.changedTouches) if(t.identifier===id){ let dx=t.clientX-cx,dy=t.clientY-cy;
+      const m=Math.hypot(dx,dy),mx=46; if(m>mx){dx=dx/m*mx;dy=dy/m*mx;}
+      knob.style.transform='translate('+dx+'px,'+dy+'px)'; setMove(dx,dy); } },{passive:false});
+  const end=e=>{ for(const t of e.changedTouches) if(t.identifier===id){ id=null;
+    knob.style.transform='translate(0,0)'; keys.KeyA=keys.KeyD=keys.KeyW=keys.KeyS=false; } };
+  pad.addEventListener('touchend',end); pad.addEventListener('touchcancel',end);
+  const press=(elid,fn)=>{ const el=document.getElementById(elid); if(!el)return;
+    el.addEventListener('touchstart',e=>{e.preventDefault();fn();},{passive:false}); el.addEventListener('mousedown',fn); };
+  press('bPass',()=>act.passB=1); press('bShoot',()=>act.shootB=1); press('bTackle',()=>act.tackleB=1);
+  const tap=(elid,fn)=>{ const el=document.getElementById(elid); if(el)el.addEventListener('click',fn); };
+  tap('mAI',()=>{ if(!(mode==='host'||mode==='client'))mode='ai'; });
+  tap('mHost',()=>goOnline('host')); tap('mJoin',()=>goOnline('join'));
+  tap('mKick',()=>{ if(!(mode==='host'||mode==='client'))startMatch(); });
+  tap('mReset',()=>{ if(!(mode==='host'||mode==='client'))resetAll(); });
+})();
 mode='ai'; resetAll(); selfTest(); requestAnimationFrame(frame);
 </script>
