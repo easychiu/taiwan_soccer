@@ -1,0 +1,35 @@
+name: fragility
+on:
+  schedule:
+    - cron: '0 1 * * 1'        # 每週一 01:00 UTC ≈ 台灣週一 09:00
+  workflow_dispatch:            # 也可在 Actions 分頁手動按 Run
+permissions:
+  contents: write               # 讓 Action 把 fragility.json 推回 repo
+  issues: write                 # 脆弱時開 issue 通知(會寄信給你)
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: pip install --quiet pandas numpy yfinance
+      - run: python fragility_dashboard.py "^TWII" --json
+      - name: commit fragility.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add fragility.json
+          git commit -m "weekly fragility update" || echo "no change"
+          git push
+      - name: alert only if fragile (score >= 4)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          score=$(python -c "import json;print(json.load(open('fragility.json'))['total'])")
+          if python -c "import sys;sys.exit(0 if float('$score')>=4 else 1)"; then
+            gh issue create --title "⚠️ 脆弱度升高 ${score}/10" \
+              --body "脆弱度達 ${score}/10。詳見 fragility.json 或 fragility.html。提醒:這是狀態不是時點,分批回應、別預測哪天。"
+          else
+            echo "calm (${score}/10), no alert"
+          fi

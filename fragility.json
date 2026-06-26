@@ -1,0 +1,50 @@
+{
+  "ticker": "^TWII",
+  "total": 3.0,
+  "band": "升高 → 留意, 小幅減碼+拉現金",
+  "asof": "2026-06-26 06:33 UTC",
+  "signals": [
+    {
+      "name": "^TWII趨勢/乖離",
+      "reading": "價44572/200MA32693",
+      "pts": 1.0,
+      "note": "在200MA上方+36%; 乖離>30%"
+    },
+    {
+      "name": "HY信用利差",
+      "reading": "2.76%(1yr均2.90)",
+      "pts": 0,
+      "note": "平靜"
+    },
+    {
+      "name": "殖利率曲線10Y-2Y",
+      "reading": "+0.31",
+      "pts": 0,
+      "note": "領先6~24月,極不定"
+    },
+    {
+      "name": "NFCI金融狀況",
+      "reading": "-0.52",
+      "pts": 0,
+      "note": "寬鬆"
+    },
+    {
+      "name": "VIX波動",
+      "reading": "18.6",
+      "pts": 0,
+      "note": "雙面:極高常是底"
+    },
+    {
+      "name": "市場廣度RSP/SPY",
+      "reading": "6月+3.0%",
+      "pts": 0.0,
+      "note": "負=廣度差,撐盤"
+    },
+    {
+      "name": "Shiller CAPE估值",
+      "reading": "41.0 極貴",
+      "pts": 2.0,
+      "note": "歷史均~17; 高估值→長期報酬偏低"
+    }
+  ]
+}
